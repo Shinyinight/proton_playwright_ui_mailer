@@ -6,7 +6,31 @@ import shutil
 import uuid
 from pathlib import Path
 
-from models import BrowserProfile
+from models import BrowserProfile, Recipient
+
+
+def assign_profiles_evenly(
+    recipients: list[Recipient],
+    profiles: list[BrowserProfile],
+) -> dict[str, BrowserProfile]:
+    """Map each recipient email to a profile in contiguous equal slices.
+
+    With 3 profiles and 9 recipients, the first third use profiles[0], the next
+    third use profiles[1], and the last third use profiles[2]. Remainder rows
+    are distributed across the earlier slices.
+    """
+    if not profiles:
+        raise ValueError("Create at least one Proton Mail browser profile first.")
+    if not recipients:
+        return {}
+
+    total = len(recipients)
+    count = len(profiles)
+    assignments: dict[str, BrowserProfile] = {}
+    for index, recipient in enumerate(recipients):
+        profile_index = min((index * count) // total, count - 1)
+        assignments[recipient.email] = profiles[profile_index]
+    return assignments
 
 
 class ProfileStore:
@@ -20,7 +44,7 @@ class ProfileStore:
 
     def list_profiles(self) -> list[BrowserProfile]:
         records = self._read()
-        profiles = [
+        return [
             BrowserProfile(
                 profile_id=str(record["profile_id"]),
                 label=str(record["label"]),
@@ -29,7 +53,6 @@ class ProfileStore:
             )
             for record in records
         ]
-        return sorted(profiles, key=lambda item: item.label.lower())
 
     def add_profile(self, label: str, expected_email: str) -> BrowserProfile:
         clean_label = label.strip()

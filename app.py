@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 from proton_ui import ProtonBrowserManager, ProtonUiAutomator, ProtonUiError, LoginRequiredError
 from login_browser import LoginBrowserError, open_normal_login_browser
 from models import BrowserProfile, Recipient
-from profile_store import ProfileStore
+from profile_store import ProfileStore, assign_profiles_evenly
 from storage import HistoryStore
 from template_engine import compose_message, load_recipients, load_templates
 
@@ -170,8 +170,8 @@ class MailerApp(tk.Tk):
         strategy_box = ttk.Combobox(
             options,
             textvariable=self.profile_strategy,
-            values=("Fixed profile", "CSV sender_profile"),
-            width=20,
+            values=("Fixed profile", "Split across profiles", "CSV sender_profile"),
+            width=22,
             state="readonly",
         )
         strategy_box.pack(side="left", padx=(5, 18))
@@ -218,8 +218,9 @@ class MailerApp(tk.Tk):
         ttk.Label(
             tab,
             text=(
-                "CSV sender_profile mode requires each row to name a configured profile by profile name, Proton Mail "
-                "address, or profile ID. It is for explicit sender assignment, not automatic limit bypass."
+                "Split across profiles divides the eligible CSV in order into equal slices (about 1/N each) using "
+                "the profiles listed on the Browser profiles tab. CSV sender_profile mode requires each row to name "
+                "a configured profile; use it for explicit assignment, not automatic limit bypass."
             ),
             wraplength=1020,
         ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
@@ -411,7 +412,15 @@ class MailerApp(tk.Tk):
             recipients, templates, issues = self._load_campaign()
             recipient = recipients[0]
             subject, body = compose_message(recipient, templates, self.unsubscribe_text.get())
-            profile = self._resolve_profile(recipient)
+            profile = self._resolve_profile(recipient, recipients)
+            split_summary = ""
+            if self.profile_strategy.get() == "Split across profiles":
+                assigned = assign_profiles_evenly(recipients, self.profiles)
+                counts: dict[str, int] = {}
+                for item in assigned.values():
+                    counts[item.label] = counts.get(item.label, 0) + 1
+                parts = [f"{label}: {count}" for label, count in counts.items()]
+                split_summary = "SPLIT PLAN: " + ", ".join(parts) + "\n"
         except Exception as exc:
             messagebox.showerror("Preview failed", str(exc))
             return
@@ -420,6 +429,7 @@ class MailerApp(tk.Tk):
         if issues:
             self._append("CSV notes:\n" + "\n".join(issues[:20]) + "\n\n")
         self._append(
+            f"{split_summary}"
             f"BROWSER PROFILE: {profile.label} ({profile.expected_email})\n"
             f"TO: {recipient.email}\nSUBJECT: {subject}\n\n{body}\n"
         )
@@ -448,7 +458,7 @@ class MailerApp(tk.Tk):
             if not 0 <= delay <= 3600:
                 raise ValueError("The delay must be between 0 and 3600 seconds.")
             for recipient in recipients:
-                self._resolve_profile(recipient)
+                self._resolve_profile(recipient, recipients)
         except Exception as exc:
             messagebox.showerror("Campaign configuration", str(exc))
             return
@@ -489,11 +499,28 @@ class MailerApp(tk.Tk):
         )
         self.worker.start()
 
-    def _resolve_profile(self, recipient: Recipient) -> BrowserProfile:
-        if self.profile_strategy.get() == "Fixed profile":
+    def _resolve_profile(
+        self,
+        recipient: Recipient,
+        recipients: list[Recipient] | None = None,
+        split_map: dict[str, BrowserProfile] | None = None,
+    ) -> BrowserProfile:
+        strategy = self.profile_strategy.get()
+        if strategy == "Fixed profile":
             profile = self.profile_store.find(self.fixed_profile.get())
             if profile is None:
                 raise ValueError("Select a valid fixed browser profile.")
+            return profile
+
+        if strategy == "Split across profiles":
+            if split_map is not None:
+                profile = split_map.get(recipient.email)
+            elif recipients is not None:
+                profile = assign_profiles_evenly(recipients, self.profiles).get(recipient.email)
+            else:
+                raise ValueError("Split across profiles requires the full recipient list.")
+            if profile is None:
+                raise ValueError(f"No split assignment was produced for {recipient.email}.")
             return profile
 
         if not recipient.sender_profile:
@@ -530,6 +557,14 @@ class MailerApp(tk.Tk):
                     profile.profile_id: self.history.operations_last_24h(profile.profile_id)
                     for profile in self.profiles
                 }
+                split_map = None
+                if self.profile_strategy.get() == "Split across profiles":
+                    split_map = assign_profiles_evenly(recipients, self.profiles)
+                    plan = ", ".join(
+                        f"{profile.label}: {sum(1 for item in split_map.values() if item.profile_id == profile.profile_id)}"
+                        for profile in self.profiles
+                    )
+                    self.events.put(("log", f"Split across {len(self.profiles)} profile(s): {plan}\n"))
 
                 for index, recipient in enumerate(recipients, start=1):
                     if self.stop_event.is_set():
@@ -542,7 +577,7 @@ class MailerApp(tk.Tk):
                         self.events.put(("progress", (index, f"Processed {index} of {len(recipients)}")))
                         continue
 
-                    profile = self._resolve_profile(recipient)
+                    profile = self._resolve_profile(recipient, recipients, split_map)
                     if profile.profile_id in blocked_profiles:
                         self.events.put(("log", f"SKIP {recipient.email}: profile {profile.label} needs attention.\n"))
                         self.events.put(("progress", (index, f"Processed {index} of {len(recipients)}")))

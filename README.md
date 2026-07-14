@@ -13,7 +13,7 @@ The application deliberately:
 - defaults to draft mode;
 - prevents duplicate completion for the same campaign and recipient;
 - applies a configurable rolling 24-hour local cap per browser profile;
-- uses one fixed sender or an explicit `sender_profile` value from the CSV;
+- uses one fixed sender, an even split across all configured profiles, or an explicit `sender_profile` value from the CSV;
 - does not automatically rotate accounts to evade provider limits.
 
 ## How it works
@@ -110,7 +110,7 @@ Any CSV column can be referenced as `{{column_name}}`. A row-level `subject` or 
 2. Select the recipient CSV and template JSON.
 3. Enter a unique campaign ID.
 4. Begin with **Drafts** mode.
-5. Choose one fixed browser profile or **CSV sender_profile**.
+5. Choose one fixed browser profile, **Split across profiles**, or **CSV sender_profile**.
 6. Set a conservative local cap and delay.
 7. Confirm the recipient-consent checkbox.
 8. Click **Preview first eligible email**.
@@ -141,6 +141,10 @@ Common failure causes include:
 ### Fixed profile
 
 Every eligible recipient uses the browser profile selected in the application.
+
+### Split across profiles
+
+Eligible CSV rows are divided in list order into equal contiguous slices across every configured browser profile. With 3 profiles and 9 recipients, the first three go to the first profile, the next three to the second, and the last three to the third. Profiles are used in the order you added them (same order as the Browser profiles tab). Each profile still respects its own local rolling 24-hour cap.
 
 ### CSV sender_profile
 
