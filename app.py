@@ -11,10 +11,12 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from playwright.sync_api import sync_playwright
 
-from proton_ui import ProtonBrowserManager, ProtonUiAutomator, ProtonUiError, LoginRequiredError
+from browser_manager import BrowserManager, LoginRequiredError
+from gmail_ui import GmailUiAutomator
 from login_browser import LoginBrowserError, open_normal_login_browser
 from models import BrowserProfile, Recipient
-from profile_store import ProfileStore, assign_profiles_evenly
+from profile_store import ProfileStore, assign_profiles_evenly, normalize_provider
+from proton_ui import ProtonUiAutomator
 from storage import HistoryStore
 from template_engine import compose_message, load_recipients, load_templates
 
@@ -35,7 +37,7 @@ CHANNEL_LABELS = {
 class MailerApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Proton Mail Playwright UI Mailer")
+        self.title("Playwright UI Mailer (Proton + Gmail)")
         self.geometry("1180x790")
         self.minsize(1000, 680)
 
@@ -76,9 +78,9 @@ class MailerApp(tk.Tk):
         ttk.Label(
             tab,
             text=(
-                "Create one separate Playwright browser profile for each authorized Proton Mail account. "
+                "Create one separate browser profile for each authorized Proton Mail or Gmail account. "
                 "The program never asks for your password: sign in manually in the visible browser window. "
-                "Use Proton Mail in English so the UI controls can be located reliably."
+                "Use the mailbox UI in English so the controls can be located reliably."
             ),
             wraplength=1020,
         ).grid(row=0, column=0, sticky="w", pady=(0, 12))
@@ -101,19 +103,21 @@ class MailerApp(tk.Tk):
 
         buttons = ttk.Frame(tab)
         buttons.grid(row=2, column=0, sticky="w", pady=(0, 8))
-        ttk.Button(buttons, text="Add Proton Mail browser profile", command=self._add_profile).pack(side="left")
+        ttk.Button(buttons, text="Add browser profile", command=self._add_profile).pack(side="left")
         ttk.Button(buttons, text="Open normal browser to sign in", command=self._open_selected_profile).pack(side="left", padx=8)
         ttk.Button(buttons, text="Remove selected", command=self._remove_selected_profile).pack(side="left")
         ttk.Button(buttons, text="Refresh", command=self._refresh_profiles).pack(side="left", padx=8)
 
-        columns = ("label", "email", "folder")
+        columns = ("label", "provider", "email", "folder")
         self.profile_tree = ttk.Treeview(tab, columns=columns, show="headings", selectmode="browse")
         self.profile_tree.heading("label", text="Profile name")
-        self.profile_tree.heading("email", text="Expected Proton address")
+        self.profile_tree.heading("provider", text="Provider")
+        self.profile_tree.heading("email", text="Expected address")
         self.profile_tree.heading("folder", text="Local browser-data folder")
-        self.profile_tree.column("label", width=180, anchor="w")
-        self.profile_tree.column("email", width=260, anchor="w")
-        self.profile_tree.column("folder", width=650, anchor="w")
+        self.profile_tree.column("label", width=160, anchor="w")
+        self.profile_tree.column("provider", width=100, anchor="w")
+        self.profile_tree.column("email", width=240, anchor="w")
+        self.profile_tree.column("folder", width=560, anchor="w")
         self.profile_tree.grid(row=3, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(tab, orient="vertical", command=self.profile_tree.yview)
         scroll.grid(row=3, column=1, sticky="ns")
@@ -297,21 +301,65 @@ class MailerApp(tk.Tk):
             self.template_path.set(path)
 
     def _add_profile(self) -> None:
-        label = simpledialog.askstring("Profile name", "Enter a short name, such as Sales Proton:", parent=self)
-        if label is None:
-            return
-        email = simpledialog.askstring("Expected Proton address", "Enter the Proton Mail address for this profile:", parent=self)
-        if email is None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Add browser profile")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        provider_var = tk.StringVar(value="Proton Mail")
+        label_var = tk.StringVar()
+        email_var = tk.StringVar()
+        result: dict[str, str] = {}
+
+        frame = ttk.Frame(dialog, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(frame, text="Provider:").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Combobox(
+            frame,
+            textvariable=provider_var,
+            values=("Proton Mail", "Gmail"),
+            width=28,
+            state="readonly",
+        ).grid(row=0, column=1, sticky="ew", pady=4, padx=(8, 0))
+        ttk.Label(frame, text="Profile name:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=label_var, width=32).grid(row=1, column=1, sticky="ew", pady=4, padx=(8, 0))
+        ttk.Label(frame, text="Expected address:").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(frame, textvariable=email_var, width=32).grid(row=2, column=1, sticky="ew", pady=4, padx=(8, 0))
+
+        def submit() -> None:
+            result["provider"] = "gmail" if provider_var.get() == "Gmail" else "proton"
+            result["label"] = label_var.get()
+            result["email"] = email_var.get()
+            dialog.destroy()
+
+        def cancel() -> None:
+            dialog.destroy()
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=cancel).pack(side="right")
+        ttk.Button(buttons, text="Add", command=submit).pack(side="right", padx=(0, 8))
+        dialog.bind("<Return>", lambda _event: submit())
+        dialog.bind("<Escape>", lambda _event: cancel())
+        dialog.wait_window()
+
+        if not result:
             return
         try:
-            profile = self.profile_store.add_profile(label, email)
+            profile = self.profile_store.add_profile(
+                result["label"],
+                result["email"],
+                provider=normalize_provider(result["provider"]),
+            )
         except Exception as exc:
             messagebox.showerror("Could not add profile", str(exc))
             return
         self._refresh_profiles()
         messagebox.showinfo(
             "Profile created",
-            f"Created {profile.label}. Select it and click 'Open normal browser to sign in'.",
+            f"Created {profile.label} ({profile.provider_label}). "
+            "Select it and click 'Open normal browser to sign in'.",
         )
 
     def _selected_profile(self) -> BrowserProfile | None:
@@ -382,7 +430,12 @@ class MailerApp(tk.Tk):
                 "",
                 tk.END,
                 iid=profile.profile_id,
-                values=(profile.label, profile.expected_email, str(profile.user_data_dir)),
+                values=(
+                    profile.label,
+                    profile.provider_label,
+                    profile.expected_email,
+                    str(profile.user_data_dir),
+                ),
             )
 
         labels = [profile.label for profile in self.profiles]
@@ -431,7 +484,7 @@ class MailerApp(tk.Tk):
             self._append("CSV notes:\n" + "\n".join(issues[:20]) + "\n\n")
         self._append(
             f"{split_summary}"
-            f"BROWSER PROFILE: {profile.label} ({profile.expected_email})\n"
+            f"BROWSER PROFILE: {profile.label} ({profile.provider_label}, {profile.expected_email})\n"
             f"TO: {recipient.email}\nSUBJECT: {subject}\n\n{body}\n"
         )
         self.status_text.set(f"Previewing 1 of {len(recipients)} eligible recipients.")
@@ -440,13 +493,13 @@ class MailerApp(tk.Tk):
         if self.worker and self.worker.is_alive():
             return
         if self.profile_window_thread and self.profile_window_thread.is_alive():
-            messagebox.showerror("Profile browser open", "Close the manually opened Proton Mail browser before starting.")
+            messagebox.showerror("Profile browser open", "Close the manually opened login browser before starting.")
             return
         if not self.confirmed.get():
             messagebox.showerror("Confirmation required", "Confirm the recipient-consent statement before continuing.")
             return
         if not self.profiles:
-            messagebox.showerror("No browser profiles", "Create and sign in to at least one Proton Mail browser profile first.")
+            messagebox.showerror("No browser profiles", "Create and sign in to at least one browser profile first.")
             return
 
         try:
@@ -468,7 +521,7 @@ class MailerApp(tk.Tk):
         if mode == "send":
             confirmation = simpledialog.askstring(
                 "Confirm direct sending",
-                "The browser will click Proton Mail's Send button. Type SEND to continue:",
+                "The browser will click the mailbox Send button. Type SEND to continue:",
                 parent=self,
             )
             if confirmation != "SEND":
@@ -552,8 +605,11 @@ class MailerApp(tk.Tk):
 
         try:
             with sync_playwright() as playwright:
-                manager = ProtonBrowserManager(playwright, browser_channel=channel)
-                automator = ProtonUiAutomator(SCREENSHOT_DIR)
+                manager = BrowserManager(playwright, browser_channel=channel)
+                automators = {
+                    "proton": ProtonUiAutomator(SCREENSHOT_DIR),
+                    "gmail": GmailUiAutomator(SCREENSHOT_DIR),
+                }
                 counts = {
                     profile.profile_id: self.history.operations_last_24h(profile.profile_id)
                     for profile in self.profiles
@@ -579,6 +635,8 @@ class MailerApp(tk.Tk):
                         continue
 
                     profile = self._resolve_profile(recipient, recipients, split_map)
+                    provider = normalize_provider(profile.provider)
+                    automator = automators[provider]
                     if profile.profile_id in blocked_profiles:
                         self.events.put(("log", f"SKIP {recipient.email}: profile {profile.label} needs attention.\n"))
                         self.events.put(("progress", (index, f"Processed {index} of {len(recipients)}")))
@@ -593,7 +651,12 @@ class MailerApp(tk.Tk):
                     try:
                         subject, body = compose_message(recipient, templates, unsubscribe_text)
                         opened = manager.open_profile(profile)
-                        self.events.put(("log", f"UI {mode.upper()}: {recipient.email} via {profile.label}\n"))
+                        self.events.put(
+                            (
+                                "log",
+                                f"UI {mode.upper()} ({profile.provider_label}): {recipient.email} via {profile.label}\n",
+                            )
+                        )
                         automator.create_message(
                             opened,
                             recipient=recipient.email,
@@ -668,7 +731,7 @@ class MailerApp(tk.Tk):
 
     def _stop(self) -> None:
         self.stop_event.set()
-        self.status_text.set("Stopping after the current Proton Mail UI operation...")
+        self.status_text.set("Stopping after the current mailbox UI operation...")
 
     def _drain_events(self) -> None:
         try:

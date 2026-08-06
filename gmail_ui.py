@@ -7,30 +7,26 @@ from typing import Callable
 
 from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
-from browser_manager import BrowserManager, LoginRequiredError, MailUiError, OpenProfile
+from browser_manager import LoginRequiredError, MailUiError, OpenProfile
 
-PROTON_MAIL_URL = "https://mail.proton.me/u/0/inbox"
-
-# Backward-compatible aliases for existing imports/tests.
-ProtonBrowserManager = BrowserManager
-ProtonUiError = MailUiError
+GMAIL_MAIL_URL = "https://mail.google.com/mail/u/0/#inbox"
 
 
-class ProtonUiAutomator:
+class GmailUiAutomator:
     def __init__(self, screenshot_dir: str | Path) -> None:
         self.screenshot_dir = Path(screenshot_dir)
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
 
     def open_for_manual_login(self, opened: OpenProfile) -> None:
-        opened.page.goto(PROTON_MAIL_URL, wait_until="domcontentloaded")
+        opened.page.goto(GMAIL_MAIL_URL, wait_until="domcontentloaded")
         opened.page.bring_to_front()
 
     def ensure_ready(self, opened: OpenProfile) -> None:
         page = opened.page
         if page.is_closed():
             raise MailUiError("The browser window was closed.")
-        if "mail.proton.me" not in page.url:
-            page.goto(PROTON_MAIL_URL, wait_until="domcontentloaded")
+        if "mail.google.com" not in page.url:
+            page.goto(GMAIL_MAIL_URL, wait_until="domcontentloaded")
 
         try:
             self._compose_button(page).wait_for(state="visible", timeout=60_000)
@@ -38,11 +34,11 @@ class ProtonUiAutomator:
             if self._looks_like_sign_in(page):
                 raise LoginRequiredError(
                     f"Sign in manually to {opened.profile.expected_email} in this browser profile, "
-                    "complete any Proton security checks, and try again."
+                    "complete any Google security checks, and try again."
                 ) from exc
             raise MailUiError(
-                "Proton Mail did not become ready. Confirm the inbox is fully loaded, Proton Mail is using "
-                "English, and no dialog or security prompt is covering the page."
+                "Gmail did not become ready. Confirm the inbox is fully loaded, Gmail is using English, "
+                "and no dialog or security prompt is covering the page."
             ) from exc
 
         actual_email = self._detect_logged_in_email(page)
@@ -68,6 +64,7 @@ class ProtonUiAutomator:
 
         page = opened.page
         page.bring_to_front()
+        self._dismiss_popups(page)
         self._compose_button(page).click()
 
         subject_box = self._subject_input(page)
@@ -77,15 +74,16 @@ class ProtonUiAutomator:
         to_box = self._to_input(root, page)
         to_box.click()
         to_box.fill(recipient)
-        to_box.press("Enter")
+        to_box.press("Tab")
 
+        subject_box.click()
         subject_box.fill(subject)
         self._fill_body(root, page, body)
 
         if stop_requested and stop_requested():
             self._wait_for_autosave(page)
             self._save_and_close(root, page)
-            raise MailUiError("Stopped after composing; the message was left as a Proton Mail draft.")
+            raise MailUiError("Stopped after composing; the message was left as a Gmail draft.")
 
         if mode == "draft":
             self._wait_for_autosave(page)
@@ -108,63 +106,79 @@ class ProtonUiAutomator:
             return ""
 
     @staticmethod
+    def _dismiss_popups(page: Page) -> None:
+        dismiss_labels = (
+            r"^Got it$",
+            r"^Not now$",
+            r"^No thanks$",
+            r"^Dismiss$",
+            r"^Close$",
+        )
+        for label in dismiss_labels:
+            try:
+                button = page.get_by_role("button", name=re.compile(label, re.I))
+                if button.count() > 0 and button.first.is_visible():
+                    button.first.click(timeout=1_500)
+                    page.wait_for_timeout(300)
+            except Exception:
+                continue
+
+    @staticmethod
     def _compose_button(page: Page) -> Locator:
         candidates = [
-            page.locator('[data-testid="sidebar:compose"]'),
-            page.locator('button[data-testid*="compose" i]').filter(has_text=re.compile(r"New message|Compose", re.I)),
-            page.get_by_role("button", name=re.compile(r"^New message$", re.I)),
+            page.locator('div[role="button"][gh="cm"]'),
             page.get_by_role("button", name=re.compile(r"^Compose$", re.I)),
-            page.locator('button:has-text("New message")'),
+            page.locator('div[role="button"]').filter(has_text=re.compile(r"^Compose$", re.I)),
+            page.locator('[aria-label="Compose"]'),
         ]
-        return ProtonUiAutomator._first_existing(candidates)
+        return GmailUiAutomator._first_existing(candidates)
 
     @staticmethod
     def _subject_input(page: Page) -> Locator:
         candidates = [
-            page.locator('[data-testid="composer:subject"] input').last,
-            page.locator('input[data-testid="composer:subject"]').last,
-            page.locator('input[placeholder="Subject"]').last,
+            page.locator('input[name="subjectbox"]').last,
             page.locator('input[aria-label="Subject"]').last,
-            page.locator('input[name="subject"]').last,
+            page.locator('input[placeholder="Subject"]').last,
         ]
-        return ProtonUiAutomator._first_existing(candidates)
+        return GmailUiAutomator._first_existing(candidates)
 
     @staticmethod
     def _compose_root(subject_box: Locator) -> Locator:
         candidates = [
-            subject_box.locator('xpath=ancestor::*[@data-testid="composer"][1]'),
-            subject_box.locator('xpath=ancestor::*[contains(@data-testid,"composer")][1]'),
-            subject_box.locator('xpath=ancestor::*[@role="dialog"][1]'),
-            subject_box.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," composer ")][1]'),
-            subject_box.locator("xpath=ancestor::section[1]"),
+            subject_box.locator('xpath=ancestor::div[contains(@class,"M9")][1]'),
+            subject_box.locator('xpath=ancestor::div[@role="dialog"][1]'),
+            subject_box.locator('xpath=ancestor::form[1]'),
+            subject_box.locator("xpath=ancestor::div[1]"),
         ]
-        return ProtonUiAutomator._first_existing(candidates)
+        return GmailUiAutomator._first_existing(candidates)
 
     @staticmethod
     def _to_input(root: Locator, page: Page) -> Locator:
         candidates = [
-            root.locator('[data-testid="composer:to"] input'),
-            root.locator('[data-testid*="composer" i][data-testid*="to" i] input'),
-            root.locator('input[aria-label="To"]'),
-            root.locator('input[placeholder="To"]'),
-            root.locator('input[placeholder*="Email address" i]'),
-            root.locator('input[autocomplete="email"]'),
-            page.locator('[data-testid="composer:to"] input').last,
-            page.locator('input[placeholder*="Email address" i]').last,
+            root.locator('textarea[name="to"]'),
+            root.locator('input[name="to"]'),
+            root.locator('textarea[aria-label*="To" i]'),
+            root.locator('input[aria-label*="To" i]'),
+            root.locator('[aria-label*="To recipients" i]'),
+            page.locator('textarea[name="to"]').last,
+            page.locator('input[aria-label*="To recipients" i]').last,
+            page.locator('textarea[aria-label*="To" i]').last,
         ]
-        locator = ProtonUiAutomator._first_existing(candidates)
+        locator = GmailUiAutomator._first_existing(candidates)
         locator.wait_for(state="visible", timeout=15_000)
         return locator
 
     @staticmethod
     def _fill_body(root: Locator, page: Page, body: str) -> None:
-        direct_candidates = [
-            root.locator('[data-testid="composer:body"] [contenteditable="true"]'),
-            root.locator('[data-testid*="editor" i][contenteditable="true"]'),
-            root.locator('[role="textbox"][contenteditable="true"]'),
+        candidates = [
+            root.locator('div[aria-label="Message Body"][contenteditable="true"]'),
+            root.locator('div[role="textbox"][contenteditable="true"]'),
+            root.locator('div[g_editable="true"][contenteditable="true"]'),
             root.locator('div[contenteditable="true"]'),
+            page.locator('div[aria-label="Message Body"][contenteditable="true"]').last,
+            page.locator('div[role="textbox"][g_editable="true"]').last,
         ]
-        for candidate in direct_candidates:
+        for candidate in candidates:
             try:
                 count = candidate.count()
             except Exception:
@@ -172,85 +186,54 @@ class ProtonUiAutomator:
             for index in range(count):
                 editor = candidate.nth(index)
                 try:
-                    if editor.is_visible():
-                        editor.click()
-                        editor.fill(body)
-                        return
-                except Exception:
-                    continue
-
-        iframe_candidates = [
-            root.locator('iframe[data-testid*="editor" i]'),
-            root.locator('iframe[title*="body" i]'),
-            root.locator("iframe"),
-        ]
-        for frames in iframe_candidates:
-            try:
-                count = frames.count()
-            except Exception:
-                count = 0
-            for index in range(count):
-                try:
-                    handle = frames.nth(index).element_handle()
-                    frame = handle.content_frame() if handle else None
-                    if frame is None:
+                    if not editor.is_visible():
                         continue
-                    editor_candidates = [
-                        frame.locator('[contenteditable="true"]').first,
-                        frame.locator('[role="textbox"]').first,
-                        frame.locator("body").first,
-                    ]
-                    for editor in editor_candidates:
-                        if editor.count() == 0 or not editor.is_visible():
-                            continue
-                        editor.click()
-                        try:
-                            editor.fill(body)
-                        except Exception:
-                            page.keyboard.press("Control+A")
-                            page.keyboard.insert_text(body)
-                        return
+                    editor.click()
+                    try:
+                        editor.fill(body)
+                    except Exception:
+                        page.keyboard.press("Control+A")
+                        page.keyboard.insert_text(body)
+                    return
                 except Exception:
                     continue
-
         raise MailUiError(
-            "The Proton Mail message editor was not found. Proton may have changed the composer interface."
+            "The Gmail message editor was not found. Gmail may have changed the composer interface."
         )
 
     @staticmethod
     def _send_button(root: Locator, page: Page) -> Locator:
         candidates = [
-            root.locator('[data-testid="composer:send-button"]'),
-            root.locator('button[data-testid*="send" i]'),
+            root.locator('div[role="button"][aria-label*="Send" i]'),
             root.get_by_role("button", name=re.compile(r"^Send$", re.I)),
-            root.locator('button:has-text("Send")'),
-            page.locator('[data-testid="composer:send-button"]').last,
+            root.locator('div[role="button"]').filter(has_text=re.compile(r"^Send$", re.I)),
+            page.locator('div[role="button"][aria-label*="Send" i]').last,
+            page.get_by_role("button", name=re.compile(r"^Send$", re.I)).last,
         ]
-        locator = ProtonUiAutomator._first_existing(candidates)
+        locator = GmailUiAutomator._first_existing(candidates)
         locator.wait_for(state="visible", timeout=15_000)
         return locator
 
     @staticmethod
     def _save_and_close(root: Locator, page: Page) -> None:
         candidates = [
-            root.locator('[data-testid="composer:close-button"]'),
-            root.locator('button[data-testid*="composer" i][data-testid*="close" i]'),
-            root.get_by_role("button", name=re.compile(r"^(Save and close|Close)$", re.I)),
-            root.locator('button[aria-label="Close"]'),
-            root.locator('button[title="Close"]'),
+            root.locator('[aria-label="Save & close"]'),
+            root.locator('[aria-label*="Save and close" i]'),
+            root.locator('img[aria-label="Save & close"]'),
+            root.get_by_role("button", name=re.compile(r"Save.*(close|draft)", re.I)),
+            root.locator('[aria-label="Close"]'),
+            page.locator('[aria-label="Save & close"]').last,
         ]
-        locator = ProtonUiAutomator._first_existing(candidates)
+        locator = GmailUiAutomator._first_existing(candidates)
         try:
             locator.click(timeout=10_000)
         except Exception as exc:
             try:
                 page.keyboard.press("Escape")
                 page.wait_for_timeout(500)
-                if root.is_visible():
-                    raise exc
             except Exception:
                 raise MailUiError(
-                    "The email was composed, but Proton Mail's composer close button was not found."
+                    "The email was composed, but Gmail's composer close button was not found."
                 ) from exc
 
     @staticmethod
@@ -259,30 +242,34 @@ class ProtonUiAutomator:
         try:
             saving.wait_for(state="hidden", timeout=15_000)
         except Exception:
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(2000)
+        # Gmail shows "Draft saved" briefly; give it a moment to finish.
+        try:
+            page.get_by_text(re.compile(r"Draft saved", re.I)).first.wait_for(state="visible", timeout=5_000)
+        except Exception:
+            page.wait_for_timeout(1000)
 
     @staticmethod
     def _wait_for_send_result(page: Page, subject_box: Locator, root: Locator) -> None:
         error_patterns = [
-            r"message could not be sent",
             r"message not sent",
-            r"sending failed",
+            r"couldn't send",
+            r"could not send",
             r"unable to send",
-            r"sending has been temporarily disabled",
-            r"reached.*limit",
+            r"sending failed",
         ]
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
             for pattern in error_patterns:
                 try:
                     if page.get_by_text(re.compile(pattern, re.I)).count() > 0:
-                        raise MailUiError(f"Proton Mail reported a sending error matching: {pattern}")
+                        raise MailUiError(f"Gmail reported a sending error matching: {pattern}")
                 except MailUiError:
                     raise
                 except Exception:
                     pass
             try:
-                if page.get_by_text(re.compile(r"Message sent|Email sent", re.I)).count() > 0:
+                if page.get_by_text(re.compile(r"Message sent|Your message has been sent", re.I)).count() > 0:
                     return
             except Exception:
                 pass
@@ -292,17 +279,17 @@ class ProtonUiAutomator:
             except Exception:
                 return
             page.wait_for_timeout(350)
-        raise MailUiError("Proton Mail did not confirm that the message was sent.")
+        raise MailUiError("Gmail did not confirm that the message was sent.")
 
     @staticmethod
     def _detect_logged_in_email(page: Page) -> str:
         email_re = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
         selectors = [
+            'a[aria-label*="@"]',
             'button[aria-label*="@"]',
+            '[aria-label*="@gmail.com" i]',
             '[aria-label*="@"]',
-            'button[title*="@"]',
-            '[title*="@"]',
-            '[data-testid*="account" i]',
+            'img[aria-label*="@"]',
         ]
         for selector in selectors:
             locator = page.locator(selector)
@@ -312,7 +299,7 @@ class ProtonUiAutomator:
                 count = 0
             for index in range(count):
                 item = locator.nth(index)
-                for attribute in ("aria-label", "title", "data-testid"):
+                for attribute in ("aria-label", "title", "alt"):
                     try:
                         value = item.get_attribute(attribute) or ""
                     except Exception:
@@ -320,26 +307,19 @@ class ProtonUiAutomator:
                     match = email_re.search(value)
                     if match:
                         return match.group(0).lower()
-                try:
-                    text = item.inner_text(timeout=500)
-                except Exception:
-                    text = ""
-                match = email_re.search(text)
-                if match:
-                    return match.group(0).lower()
         return ""
 
     @staticmethod
     def _looks_like_sign_in(page: Page) -> bool:
         url = page.url.lower()
-        if "account.proton.me" in url or "auth.proton.me" in url or "/login" in url:
+        if "accounts.google.com" in url or "/signin" in url or "/ServiceLogin" in url:
             return True
         try:
             title = page.title().lower()
             body = page.locator("body").inner_text(timeout=3_000).lower()
         except Exception:
             return False
-        login_terms = ("sign in", "log in", "username", "password")
+        login_terms = ("sign in", "log in", "choose an account", "forgot email", "password")
         return any(term in title or term in body[:3500] for term in login_terms)
 
     @staticmethod

@@ -6,7 +6,14 @@ import shutil
 import uuid
 from pathlib import Path
 
-from models import BrowserProfile, Recipient
+from models import PROVIDERS, BrowserProfile, Recipient
+
+
+def normalize_provider(provider: str) -> str:
+    value = (provider or "proton").strip().lower()
+    if value not in PROVIDERS:
+        raise ValueError(f"Provider must be one of: {', '.join(PROVIDERS)}.")
+    return value
 
 
 def assign_profiles_evenly(
@@ -20,7 +27,7 @@ def assign_profiles_evenly(
     are distributed across the earlier slices.
     """
     if not profiles:
-        raise ValueError("Create at least one Proton Mail browser profile first.")
+        raise ValueError("Create at least one browser profile first.")
     if not recipients:
         return {}
 
@@ -44,31 +51,24 @@ class ProfileStore:
 
     def list_profiles(self) -> list[BrowserProfile]:
         records = self._read()
-        return [
-            BrowserProfile(
-                profile_id=str(record["profile_id"]),
-                label=str(record["label"]),
-                expected_email=str(record.get("expected_email", "")).lower(),
-                user_data_dir=Path(record["user_data_dir"]),
-            )
-            for record in records
-        ]
+        return [self._to_profile(record) for record in records]
 
-    def add_profile(self, label: str, expected_email: str) -> BrowserProfile:
+    def add_profile(self, label: str, expected_email: str, provider: str = "proton") -> BrowserProfile:
         clean_label = label.strip()
         clean_email = expected_email.strip().lower()
+        clean_provider = normalize_provider(provider)
         if not clean_label:
             raise ValueError("Enter a profile name.")
         if not clean_email or "@" not in clean_email:
-            raise ValueError("Enter the Proton Mail address expected in this browser profile.")
+            raise ValueError(f"Enter the {clean_provider} address expected in this browser profile.")
 
         profiles = self.list_profiles()
         if any(profile.label.lower() == clean_label.lower() for profile in profiles):
             raise ValueError("A browser profile with that name already exists.")
         if any(profile.expected_email == clean_email for profile in profiles):
-            raise ValueError("That Proton Mail address is already assigned to another browser profile.")
+            raise ValueError("That email address is already assigned to another browser profile.")
 
-        slug = re.sub(r"[^a-z0-9]+", "-", clean_label.lower()).strip("-") or "proton"
+        slug = re.sub(r"[^a-z0-9]+", "-", clean_label.lower()).strip("-") or clean_provider
         profile_id = f"{slug}-{uuid.uuid4().hex[:8]}"
         user_data_dir = (self.profiles_dir / profile_id).resolve()
         user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -77,11 +77,12 @@ class ProfileStore:
             "label": clean_label,
             "expected_email": clean_email,
             "user_data_dir": str(user_data_dir),
+            "provider": clean_provider,
         }
         records = self._read()
         records.append(record)
         self._write(records)
-        return BrowserProfile(profile_id, clean_label, clean_email, user_data_dir)
+        return BrowserProfile(profile_id, clean_label, clean_email, user_data_dir, clean_provider)
 
     def remove_profile(self, profile_id: str, delete_browser_data: bool = False) -> None:
         records = self._read()
@@ -99,6 +100,18 @@ class ProfileStore:
             if value in {profile.profile_id.lower(), profile.label.lower(), profile.expected_email.lower()}:
                 return profile
         return None
+
+    def _to_profile(self, record: dict[str, object]) -> BrowserProfile:
+        provider = str(record.get("provider") or "proton").strip().lower()
+        if provider not in PROVIDERS:
+            provider = "proton"
+        return BrowserProfile(
+            profile_id=str(record["profile_id"]),
+            label=str(record["label"]),
+            expected_email=str(record.get("expected_email", "")).lower(),
+            user_data_dir=Path(record["user_data_dir"]),
+            provider=provider,
+        )
 
     def _read(self) -> list[dict[str, object]]:
         try:

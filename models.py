@@ -4,12 +4,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+PROVIDERS = ("proton", "gmail")
+
+
 @dataclass(frozen=True)
 class BrowserProfile:
     profile_id: str
     label: str
     expected_email: str
     user_data_dir: Path
+    provider: str = "proton"
+
+    @property
+    def provider_label(self) -> str:
+        return "Gmail" if self.provider == "gmail" else "Proton Mail"
 
 
 @dataclass(frozen=True)

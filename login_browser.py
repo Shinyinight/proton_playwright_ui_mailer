@@ -8,10 +8,17 @@ from pathlib import Path
 from models import BrowserProfile
 
 PROTON_LOGIN_URL = "https://account.proton.me/mail"
+GMAIL_LOGIN_URL = "https://mail.google.com/"
 
 
 class LoginBrowserError(RuntimeError):
     pass
+
+
+def login_url_for_provider(provider: str) -> str:
+    if (provider or "proton").strip().lower() == "gmail":
+        return GMAIL_LOGIN_URL
+    return PROTON_LOGIN_URL
 
 
 def _candidate_paths(channel: str) -> list[Path]:
@@ -58,7 +65,7 @@ def find_installed_browser(channel: str) -> Path:
 
 
 def open_normal_login_browser(profile: BrowserProfile, channel: str) -> subprocess.Popen[bytes]:
-    """Open Proton in an ordinary browser process using the app's dedicated profile folder.
+    """Open the provider login page in an ordinary browser using the app's profile folder.
 
     Login is intentionally not performed in a Playwright-controlled browser. Once the user
     closes this browser, Playwright can reopen the same user-data directory for UI automation.
@@ -71,6 +78,7 @@ def open_normal_login_browser(profile: BrowserProfile, channel: str) -> subproce
 
     executable = find_installed_browser(normalized)
     profile.user_data_dir.mkdir(parents=True, exist_ok=True)
+    provider = getattr(profile, "provider", "proton")
     args = [
         str(executable),
         f"--user-data-dir={profile.user_data_dir}",
@@ -78,7 +86,7 @@ def open_normal_login_browser(profile: BrowserProfile, channel: str) -> subproce
         "--new-window",
         "--no-first-run",
         "--no-default-browser-check",
-        PROTON_LOGIN_URL,
+        login_url_for_provider(provider),
     ]
     try:
         return subprocess.Popen(args, cwd=str(executable.parent))

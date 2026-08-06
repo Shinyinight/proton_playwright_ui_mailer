@@ -36,3 +36,28 @@ def test_chromium_manual_login_uses_chrome(monkeypatch, tmp_path):
     login_browser.open_normal_login_browser(Profile(), "chromium")
     assert f"--user-data-dir={Profile.user_data_dir}" in captured["args"]
     assert login_browser.PROTON_LOGIN_URL in captured["args"]
+
+
+def test_gmail_manual_login_uses_gmail_url(monkeypatch, tmp_path):
+    executable = tmp_path / "chrome.exe"
+    executable.write_bytes(b"")
+    captured = {}
+
+    class DummyProcess:
+        pass
+
+    monkeypatch.setattr(login_browser, "find_installed_browser", lambda channel: executable)
+
+    def fake_popen(args, cwd):
+        captured["args"] = args
+        captured["cwd"] = cwd
+        return DummyProcess()
+
+    monkeypatch.setattr(login_browser.subprocess, "Popen", fake_popen)
+
+    class Profile:
+        user_data_dir = tmp_path / "profile"
+        provider = "gmail"
+
+    login_browser.open_normal_login_browser(Profile(), "chrome")
+    assert login_browser.GMAIL_LOGIN_URL in captured["args"]
