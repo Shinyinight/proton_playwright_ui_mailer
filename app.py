@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import random
 import re
 import threading
 import time
@@ -190,8 +191,8 @@ class MailerApp(tk.Tk):
         limits.grid(row=row, column=0, columnspan=3, sticky="w", pady=6)
         ttk.Label(limits, text="Local cap per profile (rolling 24h):").pack(side="left")
         ttk.Spinbox(limits, from_=1, to=100, textvariable=self.local_cap, width=7).pack(side="left", padx=(5, 20))
-        ttk.Label(limits, text="Delay after each operation (seconds):").pack(side="left")
-        ttk.Spinbox(limits, from_=0, to=3600, increment=5, textvariable=self.delay_seconds, width=8).pack(side="left", padx=(5, 0))
+        ttk.Label(limits, text="Max random delay after each operation (seconds, min 15):").pack(side="left")
+        ttk.Spinbox(limits, from_=16, to=3600, increment=5, textvariable=self.delay_seconds, width=8).pack(side="left", padx=(5, 0))
         row += 1
 
         ttk.Label(tab, text="Opt-out footer:").grid(row=row, column=0, sticky="w", pady=5)
@@ -455,8 +456,8 @@ class MailerApp(tk.Tk):
             delay = float(self.delay_seconds.get())
             if not 1 <= local_cap <= 100:
                 raise ValueError("The local rolling-24-hour cap must be between 1 and 100.")
-            if not 0 <= delay <= 3600:
-                raise ValueError("The delay must be between 0 and 3600 seconds.")
+            if not 15 < delay <= 3600:
+                raise ValueError("The max random delay must be greater than 15 and at most 3600 seconds.")
             for recipient in recipients:
                 self._resolve_profile(recipient, recipients)
         except Exception as exc:
@@ -646,8 +647,10 @@ class MailerApp(tk.Tk):
                     self.events.put(
                         ("progress", (index, f"Completed {completed}; processed {index} of {len(recipients)}"))
                     )
-                    if delay > 0 and index < len(recipients) and not self.stop_event.is_set():
-                        self.stop_event.wait(delay)
+                    if delay > 15 and index < len(recipients) and not self.stop_event.is_set():
+                        wait_seconds = random.uniform(15, delay)
+                        self.events.put(("log", f"Waiting {wait_seconds:.1f}s before next operation...\n"))
+                        self.stop_event.wait(wait_seconds)
 
                 if close_browsers:
                     manager.close_all()
