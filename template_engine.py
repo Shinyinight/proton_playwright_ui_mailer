@@ -136,10 +136,11 @@ def compose_message(
 ) -> tuple[str, str]:
     template = pick_template(recipient.template_key, templates)
 
+    name = recipient.name.strip() or "there"
     values = {
         **recipient.fields,
         "email": recipient.email,
-        "name": recipient.name,
+        "name": name,
         "company": recipient.company,
         "sender_profile": recipient.sender_profile,
         "template_key": template.key,
