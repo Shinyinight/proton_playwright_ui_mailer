@@ -137,18 +137,29 @@ def compose_message(
     template = pick_template(recipient.template_key, templates)
 
     name = recipient.name.strip()
+    greeting = f"Hello {name}," if name else "Hello,"
     values = {
         **recipient.fields,
         "email": recipient.email,
         "name": name,
+        "greeting": greeting,
         "company": recipient.company,
         "sender_profile": recipient.sender_profile,
         "template_key": template.key,
     }
     subject = render_text(recipient.subject or template.subject, values).strip()
-    body = render_text(recipient.body or template.body, values).strip()
-    # Template is "Hello {{name}}," — when name is blank that becomes "Hello ,"
-    body = re.sub(r"(?i)\b(hello|hi)\s+,", r"\1,", body, count=1)
+    body_source = recipient.body or template.body
+    # Prefer {{greeting}}; also rewrite legacy "Hello {{name}}," so blank names
+    # never become "Hello ," (space left by the template).
+    if "{{greeting}}" not in body_source:
+        body_source = re.sub(
+            r"(?i)hello\s*\{\{\s*name\s*\}\}\s*,",
+            "{{greeting}}",
+            body_source,
+            count=1,
+        )
+    body = render_text(body_source, values).strip()
+    body = re.sub(r"(?i)\bhello\s+,", "Hello,", body, count=1)
 
     if not subject:
         raise ValueError(f"No subject was produced for {recipient.email}.")
