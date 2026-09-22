@@ -136,7 +136,7 @@ def compose_message(
 ) -> tuple[str, str]:
     template = pick_template(recipient.template_key, templates)
 
-    name = recipient.name.strip() or "there"
+    name = recipient.name.strip()
     values = {
         **recipient.fields,
         "email": recipient.email,
@@ -147,6 +147,8 @@ def compose_message(
     }
     subject = render_text(recipient.subject or template.subject, values).strip()
     body = render_text(recipient.body or template.body, values).strip()
+    # Template is "Hello {{name}}," — when name is blank that becomes "Hello ,"
+    body = re.sub(r"(?i)\b(hello|hi)\s+,", r"\1,", body, count=1)
 
     if not subject:
         raise ValueError(f"No subject was produced for {recipient.email}.")
