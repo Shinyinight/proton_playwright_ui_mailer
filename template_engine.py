@@ -143,22 +143,14 @@ def compose_message(
         "email": recipient.email,
         "name": name,
         "greeting": greeting,
+        "greetings": greeting,
         "company": recipient.company,
         "sender_profile": recipient.sender_profile,
         "template_key": template.key,
     }
     subject = render_text(recipient.subject or template.subject, values).strip()
-    body_source = recipient.body or template.body
-    # Prefer {{greeting}}; also rewrite legacy "Hello {{name}}," so blank names
-    # never become "Hello ," (space left by the template).
-    if "{{greeting}}" not in body_source:
-        body_source = re.sub(
-            r"(?i)hello\s*\{\{\s*name\s*\}\}\s*,",
-            "{{greeting}}",
-            body_source,
-            count=1,
-        )
-    body = render_text(body_source, values).strip()
+    body = render_text(recipient.body or template.body, values).strip()
+    # "Hello {{name}}," with a blank name becomes "Hello ,"
     body = re.sub(r"(?i)\bhello\s+,", "Hello,", body, count=1)
 
     if not subject:
