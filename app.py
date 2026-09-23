@@ -143,7 +143,7 @@ class MailerApp(tk.Tk):
         self.mode = tk.StringVar(value="Drafts")
         self.profile_strategy = tk.StringVar(value="Fixed profile")
         self.fixed_profile = tk.StringVar()
-        self.local_cap = tk.IntVar(value=20)
+        self.local_cap = tk.IntVar(value=200)
         self.delay_seconds = tk.DoubleVar(value=30.0)
         self.confirmed = tk.BooleanVar(value=False)
         self.close_browsers = tk.BooleanVar(value=True)
@@ -194,7 +194,7 @@ class MailerApp(tk.Tk):
         limits = ttk.Frame(tab)
         limits.grid(row=row, column=0, columnspan=3, sticky="w", pady=6)
         ttk.Label(limits, text="Local cap per profile (rolling 24h):").pack(side="left")
-        ttk.Spinbox(limits, from_=1, to=100, textvariable=self.local_cap, width=7).pack(side="left", padx=(5, 20))
+        ttk.Spinbox(limits, from_=1, to=200, textvariable=self.local_cap, width=7).pack(side="left", padx=(5, 20))
         ttk.Label(limits, text="Max random delay after each operation (seconds, min 15):").pack(side="left")
         ttk.Spinbox(limits, from_=16, to=3600, increment=5, textvariable=self.delay_seconds, width=8).pack(side="left", padx=(5, 0))
         row += 1
@@ -507,8 +507,8 @@ class MailerApp(tk.Tk):
             recipients, templates, issues = self._load_campaign()
             local_cap = int(self.local_cap.get())
             delay = float(self.delay_seconds.get())
-            if not 1 <= local_cap <= 100:
-                raise ValueError("The local rolling-24-hour cap must be between 1 and 100.")
+            if not 1 <= local_cap <= 200:
+                raise ValueError("The local rolling-24-hour cap must be between 1 and 200.")
             if not 15 < delay <= 3600:
                 raise ValueError("The max random delay must be greater than 15 and at most 3600 seconds.")
             for recipient in recipients:
